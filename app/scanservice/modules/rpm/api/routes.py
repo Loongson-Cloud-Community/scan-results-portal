@@ -13,7 +13,7 @@ from ..schemas.events import RpmEventRequest
 from ..services.artifacts import artifact_response, get_artifact
 from ..services.events import complete_task, fail_task, find_task, register_start
 from ..services.synchronization import sync_registered_tasks
-from ..services.task_service import get_task, list_task_page, task_payload
+from ..services.task_service import get_artifact_task, get_task, list_task_page, task_payload
 
 
 router = APIRouter(prefix="/api/v1/rpm", tags=["rpm"])
@@ -80,7 +80,7 @@ def view_artifact(
     artifact_id: int,
     db: Session = Depends(get_db),
 ) -> Response:
-    task = get_task(db, task_id)
+    task = get_artifact_task(db, task_id)
     return artifact_response(task, get_artifact(task, artifact_id), download=False)
 
 
@@ -90,5 +90,5 @@ def download_artifact(
     artifact_id: int,
     db: Session = Depends(get_db),
 ) -> Response:
-    task = get_task(db, task_id)
+    task = get_artifact_task(db, task_id)
     return artifact_response(task, get_artifact(task, artifact_id), download=True)

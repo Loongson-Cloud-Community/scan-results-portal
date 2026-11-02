@@ -17,7 +17,7 @@ from ..services.artifacts import (
 )
 from ..services.events import complete_task, fail_task, find_task, register_start
 from ..services.synchronization import sync_registered_tasks
-from ..services.task_service import get_task, list_task_page, task_payload
+from ..services.task_service import get_artifact_task, get_task, list_task_page, task_payload
 
 
 router = APIRouter(prefix="/api/v1/srpm", tags=["srpm"])
@@ -119,7 +119,7 @@ def task_findings(task_id: int, db: Session = Depends(get_db)) -> list[dict[str,
 
 @router.get("/tasks/{task_id}/artifacts")
 def task_artifacts(task_id: int, db: Session = Depends(get_db)) -> list[dict[str, Any]]:
-    task = get_task(db, task_id)
+    task = get_artifact_task(db, task_id)
     return [
         {
             "id": row.id,
@@ -134,13 +134,13 @@ def task_artifacts(task_id: int, db: Session = Depends(get_db)) -> list[dict[str
 
 @router.get("/tasks/{task_id}/artifacts/{artifact_id}/view")
 def view_artifact(task_id: int, artifact_id: int, db: Session = Depends(get_db)) -> Response:
-    task = get_task(db, task_id)
+    task = get_artifact_task(db, task_id)
     return artifact_response(task, get_artifact_row(task, artifact_id), download=False)
 
 
 @router.get("/tasks/{task_id}/artifacts/{artifact_id}/download")
 def download_artifact(task_id: int, artifact_id: int, db: Session = Depends(get_db)) -> Response:
-    task = get_task(db, task_id)
+    task = get_artifact_task(db, task_id)
     return artifact_response(task, get_artifact_row(task, artifact_id), download=True)
 
 
@@ -148,7 +148,7 @@ def download_artifact(task_id: int, artifact_id: int, db: Session = Depends(get_
 def archive_member(
     task_id: int, archive_ref: str, db: Session = Depends(get_db)
 ) -> Response:
-    return archive_member_response(get_task(db, task_id), archive_ref)
+    return archive_member_response(get_artifact_task(db, task_id), archive_ref)
 
 
 @router.post("/sync")

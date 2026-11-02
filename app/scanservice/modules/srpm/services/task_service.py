@@ -5,9 +5,9 @@ from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy import desc, func, or_, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, load_only, raiseload, selectinload
 
-from ..models import SrpmScanTask
+from ..models import SrpmScanArtifact, SrpmScanTask
 
 
 def format_timestamp(value: datetime | None) -> str:
@@ -107,6 +107,35 @@ def apply_task_fields(task: SrpmScanTask, values: dict[str, Any]) -> None:
         ):
             continue
         setattr(task, field, value)
+
+
+def get_artifact_task(db: Session, task_id: int) -> SrpmScanTask:
+    """Read delivery metadata, including archive references, without findings."""
+    task = db.scalar(
+        select(SrpmScanTask)
+        .options(
+            load_only(
+                SrpmScanTask.id,
+                SrpmScanTask.jenkins_job_full_name,
+                SrpmScanTask.jenkins_build_number,
+                raiseload=True,
+            ),
+            selectinload(SrpmScanTask.artifacts).load_only(
+                SrpmScanArtifact.id,
+                SrpmScanArtifact.task_id,
+                SrpmScanArtifact.name,
+                SrpmScanArtifact.artifact_type,
+                SrpmScanArtifact.relative_path,
+                SrpmScanArtifact.size_bytes,
+                raiseload=True,
+            ),
+            raiseload("*"),
+        )
+        .where(SrpmScanTask.id == task_id)
+    )
+    if task is None:
+        raise HTTPException(status_code=404, detail="scan task not found")
+    return task
 
 
 def get_task(db: Session, task_id: int) -> SrpmScanTask:

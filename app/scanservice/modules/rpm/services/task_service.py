@@ -5,13 +5,42 @@ from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy import desc, func, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, load_only, raiseload, selectinload
 
-from ..models import RpmScanTask
+from ..models import RpmScanArtifact, RpmScanTask
 
 
 def format_timestamp(value: datetime | None) -> str:
     return value.strftime("%Y-%m-%d %H:%M:%S") if value else "—"
+
+
+def get_artifact_task(db: Session, task_id: int) -> RpmScanTask:
+    """Read delivery metadata without loading scan results or large raw data."""
+    task = db.scalar(
+        select(RpmScanTask)
+        .options(
+            load_only(
+                RpmScanTask.id,
+                RpmScanTask.jenkins_job_full_name,
+                RpmScanTask.jenkins_build_number,
+                raiseload=True,
+            ),
+            selectinload(RpmScanTask.artifacts).load_only(
+                RpmScanArtifact.id,
+                RpmScanArtifact.task_id,
+                RpmScanArtifact.name,
+                RpmScanArtifact.artifact_type,
+                RpmScanArtifact.relative_path,
+                RpmScanArtifact.size_bytes,
+                raiseload=True,
+            ),
+            raiseload("*"),
+        )
+        .where(RpmScanTask.id == task_id)
+    )
+    if task is None:
+        raise HTTPException(status_code=404, detail="RPM scan task not found")
+    return task
 
 
 def get_task(db: Session, task_id: int) -> RpmScanTask:

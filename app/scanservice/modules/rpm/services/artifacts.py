@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from fastapi import HTTPException
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import Response
 
+from ....artifact_stream import artifact_stream_response
 from ....config import get_settings
 from ....jenkins import JenkinsClient
-from ....artifact_policy import artifact_response_options
 from ..models import RpmScanArtifact, RpmScanTask
 
 
@@ -32,24 +32,16 @@ def artifact_response(
         settings.jenkins_token,
         settings.request_timeout_seconds,
     )
-    job_name = task.jenkins_job_full_name
-    build_number = task.jenkins_build_number
-    relative_path = artifact.relative_path
-
-    def body():
-        try:
-            yield from client.iter_artifact(
-                job_name,
-                build_number,
-                relative_path,
-                max_bytes=max_bytes,
-            )
-        finally:
-            client.close()
-
-    options = artifact_response_options(
+    chunks = client.iter_artifact(
+        task.jenkins_job_full_name,
+        task.jenkins_build_number,
+        artifact.relative_path,
+        max_bytes=max_bytes,
+    )
+    return artifact_stream_response(
+        client,
+        chunks,
         artifact_type=artifact.artifact_type,
         filename=artifact.name,
         download=download,
     )
-    return StreamingResponse(content=body(), **options)

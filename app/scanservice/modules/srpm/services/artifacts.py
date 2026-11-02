@@ -3,8 +3,9 @@ from __future__ import annotations
 import tarfile
 
 from fastapi import HTTPException
-from fastapi.responses import HTMLResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, Response
 
+from ....artifact_stream import artifact_stream_response
 from ..csmock.archive import ArchiveLimitError, list_visible_members, read_visible_member
 from ....config import get_settings
 from ....jenkins import JenkinsArtifactTooLarge, JenkinsClient
@@ -104,27 +105,19 @@ def artifact_response(task: SrpmScanTask, row: SrpmScanArtifact, *, download: bo
         settings.jenkins_token,
         settings.request_timeout_seconds,
     )
-    job_name = task.jenkins_job_full_name
-    build_number = task.jenkins_build_number
-    relative_path = row.relative_path
-
-    def body():
-        try:
-            yield from client.iter_artifact(
-                job_name,
-                build_number,
-                relative_path,
-                max_bytes=max_bytes,
-            )
-        finally:
-            client.close()
-
-    options = artifact_response_options(
+    chunks = client.iter_artifact(
+        task.jenkins_job_full_name,
+        task.jenkins_build_number,
+        row.relative_path,
+        max_bytes=max_bytes,
+    )
+    return artifact_stream_response(
+        client,
+        chunks,
         artifact_type=row.artifact_type,
         filename=filename,
         download=download,
     )
-    return StreamingResponse(content=body(), **options)
 
 
 def archive_member_response(task: SrpmScanTask, archive_ref: str) -> Response:

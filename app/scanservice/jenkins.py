@@ -15,6 +15,10 @@ class JenkinsArtifactTooLarge(JenkinsError):
     pass
 
 
+class JenkinsArtifactNotFound(JenkinsError):
+    pass
+
+
 class JenkinsClient:
     def __init__(
         self,
@@ -90,6 +94,8 @@ class JenkinsClient:
         with self.client.stream(
             "GET", self._artifact_url(job_name, number, relative_path)
         ) as response:
+            if response.status_code == 404:
+                raise JenkinsArtifactNotFound("Jenkins artifact not found")
             if response.status_code >= 400:
                 raise JenkinsError(
                     f"Jenkins returned HTTP {response.status_code} for artifact"

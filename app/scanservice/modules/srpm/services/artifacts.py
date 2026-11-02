@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import mimetypes
 import tarfile
 
 from fastapi import HTTPException
@@ -9,7 +8,7 @@ from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from ..csmock.archive import ArchiveLimitError, list_visible_members, read_visible_member
 from ....config import get_settings
 from ....jenkins import JenkinsArtifactTooLarge, JenkinsClient
-from ....media import artifact_media_type
+from ....artifact_policy import artifact_response_options
 from ..models import SrpmScanArtifact, SrpmScanTask
 
 
@@ -86,17 +85,12 @@ def artifact_response(task: SrpmScanTask, row: SrpmScanArtifact, *, download: bo
         )
     if "::" in row.relative_path:
         content = read_artifact_content(task, row)
-        media_type = artifact_media_type(
+        options = artifact_response_options(
             artifact_type=row.artifact_type,
             filename=filename,
             download=download,
         )
-        disposition = "attachment" if download else "inline"
-        return Response(
-            content=content,
-            media_type=media_type,
-            headers={"Content-Disposition": f'{disposition}; filename="{filename}"'},
-        )
+        return Response(content=content, **options)
 
     if not task.jenkins_job_full_name or task.jenkins_build_number is None:
         raise HTTPException(status_code=404, detail="artifact source not found")
@@ -125,17 +119,12 @@ def artifact_response(task: SrpmScanTask, row: SrpmScanArtifact, *, download: bo
         finally:
             client.close()
 
-    media_type = artifact_media_type(
+    options = artifact_response_options(
         artifact_type=row.artifact_type,
         filename=filename,
         download=download,
     )
-    disposition = "attachment" if download else "inline"
-    return StreamingResponse(
-        content=body(),
-        media_type=media_type,
-        headers={"Content-Disposition": f'{disposition}; filename="{filename}"'},
-    )
+    return StreamingResponse(content=body(), **options)
 
 
 def archive_member_response(task: SrpmScanTask, archive_ref: str) -> Response:
@@ -189,9 +178,9 @@ def archive_member_response(task: SrpmScanTask, archive_ref: str) -> Response:
         raise HTTPException(status_code=404, detail="archive member not found") from exc
 
     filename = member_path.rsplit("/", 1)[-1]
-    media_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
     return Response(
         content=member_content,
-        media_type=media_type,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        **artifact_response_options(
+            artifact_type="OTHER", filename=filename, download=True
+        ),
     )

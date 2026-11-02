@@ -77,6 +77,7 @@ def test_view_serves_html_with_its_own_type_and_sandbox(session, monkeypatch):
     assert "script-src 'unsafe-inline'" in policy
     assert "connect-src 'none'" in policy
     assert "allow-same-origin" not in policy
+    assert response.headers["x-content-type-options"] == "nosniff"
     assert asyncio.run(response_body(response)) == b"<html></html>"
 
 
@@ -106,3 +107,16 @@ def test_known_oversized_artifact_is_rejected(session, monkeypatch, settings):
         artifact_response(task, row, download=True)
 
     assert exc_info.value.status_code == 413
+
+
+def test_unknown_format_is_downloaded_instead_of_rendered(session, monkeypatch):
+    task, row = _task_with_artifact(
+        session, monkeypatch, "unknown.bin", "OTHER", b"<html>unknown</html>"
+    )
+
+    response = artifact_response(task, row, download=False)
+
+    assert response.headers["content-type"] == "application/octet-stream"
+    assert response.headers["content-disposition"] == 'attachment; filename="unknown.bin"'
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert asyncio.run(response_body(response)) == b"<html>unknown</html>"

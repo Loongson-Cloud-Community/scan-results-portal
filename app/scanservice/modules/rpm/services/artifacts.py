@@ -5,7 +5,7 @@ from fastapi.responses import Response, StreamingResponse
 
 from ....config import get_settings
 from ....jenkins import JenkinsClient
-from ....media import artifact_media_type
+from ....artifact_policy import artifact_response_options
 from ..models import RpmScanArtifact, RpmScanTask
 
 
@@ -47,22 +47,9 @@ def artifact_response(
         finally:
             client.close()
 
-    media_type = artifact_media_type(
+    options = artifact_response_options(
         artifact_type=artifact.artifact_type,
         filename=artifact.name,
         download=download,
     )
-    disposition = "attachment" if download else "inline"
-    headers = {
-        "Content-Disposition": f'{disposition}; filename="{artifact.name.replace(chr(34), chr(39))}"'
-    }
-    if not download and artifact.artifact_type == "REPORT_HTML":
-        headers["Content-Security-Policy"] = (
-            "sandbox allow-scripts; "
-            "default-src 'none'; "
-            "script-src 'unsafe-inline'; "
-            "style-src 'unsafe-inline'; "
-            "img-src data: blob:; "
-            "connect-src 'none'"
-        )
-    return StreamingResponse(content=body(), media_type=media_type, headers=headers)
+    return StreamingResponse(content=body(), **options)

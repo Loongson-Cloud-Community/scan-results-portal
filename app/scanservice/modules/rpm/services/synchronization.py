@@ -9,7 +9,9 @@ from sqlalchemy.orm import Session
 from ....config import ArtifactLimits, Settings
 from ....jenkins import JenkinsClient
 from ....resync import resync_registered_tasks
-from ..domain.state import RPM_FAILED, RPM_FINISHED, RPM_NOT_AVAILABLE, RPM_RUNNING
+from ....scan_state import (
+    FAILED, FINISHED, NOT_AVAILABLE, RUNNING, is_terminal, state_without_results,
+)
 from ..models import (
     RpmScanArtifact,
     RpmScanComponent,
@@ -168,6 +170,8 @@ def sync_task(
     task: RpmScanTask,
     limits: ArtifactLimits | None = None,
 ) -> RpmScanTask:
+    if is_terminal(task.state):
+        return task
     limits = limits or ArtifactLimits()
     build = client.get_build(task.jenkins_job_full_name, task.jenkins_build_number)
     task.triggered_by = _cause_user(build) or task.triggered_by
@@ -186,17 +190,19 @@ def sync_task(
         _apply_manifest(task, manifest)
         _replace_results(db, task, results)
         task.state = (
-            RPM_FINISHED if task.cbt_exit_code in {0, 1} else RPM_FAILED
+            FINISHED if task.cbt_exit_code in {0, 1} else FAILED
         )
         task.sync_status = "SYNCED"
         task.sync_error = None
-    elif not build.get("building") and task.state != RPM_FAILED:
-        task.state = RPM_NOT_AVAILABLE
-        task.sync_status = "ERROR"
-        task.sync_error = "Jenkins build has no valid RPM scan manifest and JSON result"
     else:
-        task.state = RPM_RUNNING
-        task.sync_status = "PENDING"
+        task.state = state_without_results(
+            building=bool(build.get("building")), ended=task.finished_at is not None
+        )
+        if task.state == NOT_AVAILABLE:
+            task.sync_status = "ERROR"
+            task.sync_error = "Jenkins build has no valid RPM scan manifest and JSON result"
+        else:
+            task.sync_status = "PENDING"
 
     task.last_synced_at = datetime.now(timezone.utc)
     return task
@@ -218,6 +224,6 @@ def sync_registered_tasks(settings: Settings, db: Session) -> dict[str, int]:
         db,
         model=RpmScanTask,
         state_column=RpmScanTask.state,
-        active_states=(RPM_RUNNING, RPM_NOT_AVAILABLE),
+        active_states=(RUNNING, NOT_AVAILABLE),
         sync_one=_resync_task,
     )

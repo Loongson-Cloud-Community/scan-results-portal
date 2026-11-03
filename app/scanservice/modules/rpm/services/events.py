@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from ....config import Settings
 from ....jenkins import JenkinsClient
-from ..domain.state import RPM_FAILED, RPM_FINISHED, RPM_NOT_AVAILABLE, RPM_RUNNING
+from ....scan_state import FAILED, NOT_AVAILABLE, RUNNING, accepts_event, is_terminal
 from ..models import RpmScanTask
 from .synchronization import sync_task
 
@@ -32,14 +32,15 @@ def register_start(db: Session, values: dict[str, Any]) -> RpmScanTask:
             jenkins_build_number=values["jenkins_build_number"],
             rpm_name=values["rpm_name"],
             rpm_sha256=values["rpm_sha256"],
-            state=RPM_RUNNING,
+            state=RUNNING,
             sync_status="PENDING",
         )
         db.add(task)
-    task.created_at = task.created_at or values.get("created_at") or datetime.now(timezone.utc)
-    if task.state not in {RPM_FAILED, RPM_FINISHED}:
-        task.state = RPM_RUNNING
-    task.sync_error = None
+    if accepts_event(task.state, "started", ended=task.finished_at is not None):
+        task.created_at = (
+            task.created_at or values.get("created_at") or datetime.now(timezone.utc)
+        )
+        task.state = RUNNING
     return task
 
 
@@ -49,8 +50,13 @@ def complete_task(
     task: RpmScanTask,
     values: dict[str, Any],
 ) -> RpmScanTask:
-    task.finished_at = values.get("finished_at") or datetime.now(timezone.utc)
-    task.cbt_exit_code = values.get("cbt_exit_code")
+    if not accepts_event(task.state, "completed"):
+        return task
+    task.finished_at = (
+        task.finished_at or values.get("finished_at") or datetime.now(timezone.utc)
+    )
+    if task.cbt_exit_code is None:
+        task.cbt_exit_code = values.get("cbt_exit_code")
     task.sync_status = "PENDING"
     db.commit()
 
@@ -68,7 +74,9 @@ def complete_task(
         task = find_task(db, values)
         if task is None:
             raise
-        task.state = RPM_NOT_AVAILABLE
+        if is_terminal(task.state):
+            return task
+        task.state = NOT_AVAILABLE
         task.sync_status = "ERROR"
         task.sync_error = str(exc)[:4000]
         task.last_synced_at = datetime.now(timezone.utc)
@@ -79,8 +87,12 @@ def complete_task(
 
 
 def fail_task(db: Session, task: RpmScanTask, values: dict[str, Any]) -> RpmScanTask:
-    task.state = RPM_FAILED
-    task.finished_at = values.get("finished_at") or datetime.now(timezone.utc)
+    if not accepts_event(task.state, "failed"):
+        return task
+    task.state = FAILED
+    task.finished_at = (
+        task.finished_at or values.get("finished_at") or datetime.now(timezone.utc)
+    )
     task.cbt_exit_code = values.get("cbt_exit_code")
     task.sync_status = "SYNCED"
     task.sync_error = None

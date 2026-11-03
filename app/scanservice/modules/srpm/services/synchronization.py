@@ -17,6 +17,7 @@ from ..csmock.archive import (
 from ....config import Settings
 from ....jenkins import JenkinsClient
 from ....resync import resync_registered_tasks
+from ....scan_state import FINISHED, NOT_AVAILABLE, RUNNING, is_terminal, state_without_results
 from ..models import SrpmScanTask
 from ..parsers.csmock import (
     parse_sarif,
@@ -24,14 +25,6 @@ from ..parsers.csmock import (
     parse_scan_ini,
     parse_summary,
     summarize_findings,
-)
-from ..domain.state import (
-    SRPM_FAILED,
-    SRPM_FINISHED,
-    SRPM_NOT_AVAILABLE,
-    SRPM_RUNNING,
-    result_after_unavailable_archive,
-    result_after_valid_archive,
 )
 from .sync_artifacts import (
     REQUIRED_SCAN_FILES,
@@ -87,12 +80,15 @@ def _sync_build(
             jenkins_job_full_name=job,
             jenkins_build_number=number,
             lifecycle_state="DISCOVERED",
-            scan_result=SRPM_NOT_AVAILABLE,
+            scan_result=NOT_AVAILABLE,
             gate_result="NOT_EVALUATED",
             sync_status="PENDING",
         )
         session.add(task)
         session.flush()
+
+    if is_terminal(task.scan_result):
+        return task
 
     detail = client.get_build(job, number)
     building = bool(detail.get("building"))
@@ -275,12 +271,11 @@ def _sync_build(
         )
 
     if has_valid_result:
-        if task.scan_result != SRPM_FAILED:
-            task.scan_result = result_after_valid_archive()
-    elif task.scan_result not in {SRPM_FAILED, SRPM_FINISHED}:
-        task.scan_result = result_after_unavailable_archive(
+        task.scan_result = FINISHED
+    else:
+        task.scan_result = state_without_results(
             building=building,
-            ended=task.scan_finished_at is not None,
+            ended=task.scan_finished_at is not None or task.finished_at is not None,
         )
 
     now = datetime.now(timezone.utc)
@@ -323,6 +318,6 @@ def sync_registered_tasks(settings: Settings, session: Session) -> dict[str, int
         session,
         model=SrpmScanTask,
         state_column=SrpmScanTask.scan_result,
-        active_states=(SRPM_RUNNING, SRPM_NOT_AVAILABLE),
+        active_states=(RUNNING, NOT_AVAILABLE),
         sync_one=_resync_task,
     )

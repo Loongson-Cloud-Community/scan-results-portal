@@ -1,1 +1,0 @@
-"""RPM scan domain rules."""

@@ -100,15 +100,6 @@ def detail_values(task: SrpmScanTask) -> dict[str, Any]:
     return {"method": scan_method(task), "args": args_fields, "srpm_name": srpm_name}
 
 
-def apply_task_fields(task: SrpmScanTask, values: dict[str, Any]) -> None:
-    for field, value in values.items():
-        if field in {"jenkins_build_number", "jenkins_job_full_name"} or not hasattr(
-            task, field
-        ):
-            continue
-        setattr(task, field, value)
-
-
 def get_artifact_task(db: Session, task_id: int) -> SrpmScanTask:
     """Read delivery metadata, including archive references, without findings."""
     task = db.scalar(

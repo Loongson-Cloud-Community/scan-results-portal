@@ -17,7 +17,7 @@ def test_parse_rpm_manifest():
                     "filename": "docker-24.0.9-8.lns23.loongarch64.rpm",
                     "sha256": "a" * 64,
                 },
-                "scanner": {"name": "cve-bin-tool", "version": "3.4.1"},
+                "scanner": {"name": "cve-bin-tool", "version": "3.4.1", "exit_code": 0},
             }
         ).encode()
     )

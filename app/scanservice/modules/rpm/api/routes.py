@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from ....config import get_settings
 from ....db import get_db
+from ....scan_protocol import require_matching_identity
 from ....security import require_ingest_token, require_operator_token
 from ..schemas.events import RpmEventRequest
 from ..services.artifacts import artifact_response, get_artifact
@@ -27,6 +28,13 @@ def receive_event(
 ) -> dict[str, Any]:
     values = payload.dict(exclude_unset=True)
     task = find_task(db, values)
+    if task is not None:
+        try:
+            require_matching_identity({
+                "rpm_name": task.rpm_name, "rpm_sha256": task.rpm_sha256,
+            }, values)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
     if payload.event == "started":
         task = register_start(db, values)
         db.commit()

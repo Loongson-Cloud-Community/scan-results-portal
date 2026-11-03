@@ -5,15 +5,9 @@ from typing import Any
 from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
+from ....scan_protocol import require_matching_identity
 from ..models import SrpmScanFinding, SrpmScanSummary, SrpmScanTask
-
-
-def _text_value(value: Any) -> str | None:
-    if isinstance(value, str):
-        return value
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return str(value)
-    return None
+from ..schemas.manifest import SrpmManifest
 
 
 def set_manifest(task: SrpmScanTask, manifest: dict[str, Any]) -> None:
@@ -21,6 +15,14 @@ def set_manifest(task: SrpmScanTask, manifest: dict[str, Any]) -> None:
     # RPM manifest as SRPM metadata even if it reaches this function.
     if str(manifest.get("scan_type") or "").lower() == "rpm":
         return
+
+    # Validate the whole optional document before applying any of its fields.
+    SrpmManifest.parse_obj(manifest)
+    require_matching_identity({
+        "jenkins_job_full_name": task.jenkins_job_full_name,
+        "jenkins_build_number": task.jenkins_build_number,
+        "srpm_name": task.srpm_name,
+    }, manifest)
 
     for field in (
         "package_name",
@@ -35,18 +37,18 @@ def set_manifest(task: SrpmScanTask, manifest: dict[str, Any]) -> None:
         "mock_config",
         "gate_result",
     ):
-        value = _text_value(manifest.get(field))
+        value = manifest.get(field)
         if value is not None:
             setattr(task, field, value)
 
     scanner = manifest.get("scanner")
     scanner_name = None
-    scanner_version = _text_value(manifest.get("scanner_version"))
+    scanner_version = manifest.get("scanner_version")
     if isinstance(scanner, dict):
-        scanner_name = _text_value(scanner.get("name"))
-        scanner_version = scanner_version or _text_value(scanner.get("version"))
+        scanner_name = scanner.get("name")
+        scanner_version = scanner_version or scanner.get("version")
     else:
-        scanner_name = _text_value(scanner)
+        scanner_name = scanner
     if scanner_name is not None:
         task.scanner = scanner_name
     if scanner_version is not None:

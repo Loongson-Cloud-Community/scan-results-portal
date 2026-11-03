@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from ....config import ArtifactLimits, Settings
 from ....jenkins import JenkinsClient
 from ....resync import resync_registered_tasks
+from ....scan_protocol import require_matching_identity
 from ....scan_state import (
     FAILED, FINISHED, NOT_AVAILABLE, RUNNING, is_terminal, state_without_results,
 )
@@ -102,6 +103,12 @@ def _apply_manifest(task: RpmScanTask, manifest: dict[str, Any]) -> None:
     scanner = manifest["scanner"]
     if rpm["sha256"] != task.rpm_sha256:
         raise ValueError("manifest RPM checksum does not match the registered scan")
+    require_matching_identity({
+        "jenkins_job_full_name": task.jenkins_job_full_name,
+        "jenkins_build_number": task.jenkins_build_number,
+        "scan_key": task.scan_key,
+    }, manifest)
+    require_matching_identity({"filename": task.rpm_name}, rpm)
     task.rpm_name = rpm["filename"]
     task.name = rpm.get("name")
     task.epoch = rpm.get("epoch")
@@ -112,7 +119,9 @@ def _apply_manifest(task: RpmScanTask, manifest: dict[str, Any]) -> None:
     task.rpm_size_bytes = rpm.get("size_bytes")
     task.scanner = scanner.get("name")
     task.scanner_version = scanner.get("version")
-    task.cbt_exit_code = scanner.get("exit_code")
+    # A successful manifest cannot erase an error already reported by the agent.
+    if task.cbt_exit_code is None or task.cbt_exit_code in {0, 1}:
+        task.cbt_exit_code = scanner["exit_code"]
     task.scanner_args = scanner.get("args")
     task.scan_metadata = {"manifest": manifest}
 

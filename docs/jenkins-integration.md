@@ -45,6 +45,12 @@ Pipeline 里用 `credentials('scan-service-ingest-token')` 取值。
 确定；新 Pipeline 不需要预先创建任务或解析任务 ID，同一构建重复发送
 `started` 也不会重复建任务。
 
+事件字段采用严格类型校验：构建号是正整数，不接受布尔值、小数或数字字符串；
+Job 名不得包含空路径段、`.`、`..` 或控制字符。文件名只能是文件名本身，不能带目录。
+提供时间时须使用带时区的 ISO-8601 字符串，退出码须为整数。
+格式错误返回 HTTP 422；同一任务上报的包名或校验和与已登记信息冲突时返回
+HTTP 409，不修改原任务。
+
 ### 3.1 SRPM 事件字段
 
 | 字段 | 必填 | 说明 |
@@ -87,11 +93,11 @@ Pipeline 里用 `credentials('scan-service-ingest-token')` 取值。
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
 | `event` | 是 | `started` / `completed` / `failed` |
-| `scan_key` | 是 | 本次扫描的标识，直接使用 RPM 的 sha256；门户按它定位归档目录 |
+| `scan_key` | 是 | 必须等于 `rpm_sha256`；门户按它定位归档目录 |
 | `jenkins_job_full_name` | 是 | 完整 Job 名 |
 | `jenkins_build_number` | 是 | 构建号 |
 | `rpm_name` | 是 | RPM 文件名 |
-| `rpm_sha256` | 是 | RPM 的 sha256（64 位十六进制） |
+| `rpm_sha256` | 是 | RPM 的 sha256（64 位小写十六进制） |
 | `created_at` | started 用 | ISO-8601 扫描开始时间 |
 | `finished_at` | completed/failed 用 | ISO-8601 扫描结束时间 |
 | `cbt_exit_code` | 否 | cve-bin-tool 退出码 |
@@ -137,18 +143,26 @@ scan-results.html
 scan.log
 ```
 
-- 结构：这些文件要么位于归档根目录，要么位于 `<NVR>/` 下一层；
+- 结构：这些文件必须来自同一个目录、各出现一次，要么位于归档根目录，要么位于 `<NVR>/` 下一层；
   `<NVR>/debug/` 下的内容会被忽略；
-- 归档必须能正常解压，且单个归档不超过 512 MiB；
-- 门户还要求 `scan.ini` 可解析、`scan-results-summary.txt` 存在；
+- 归档必须能正常解压，单个归档默认不超过 128 MiB（可通过产物预算配置调整）；
+- `scan.ini` 的 `[scan]` 必须标明 `tool = csmock`，`project-name` 须与登记的
+  SRPM 文件名去掉 `.src.rpm` / `.nosrc.rpm` 后一致；
+- 正常结束的退出码须可由扫描元数据或回调确定；非零退出码标为
+  `FAILED`，不能被可选元数据中的成功退出码覆盖；
+- 摘要允许为空，表示没有发现问题；除空行和注释外，每一行必须能够解析，
+  无法识别或损坏的内容不能作为“0 findings”的成功结果；
 - 可选：额外归档 `.sarif` 文件，门户会据此解析 finding 明细；
 - 可选：归档 `scan-manifest.json` 作为任务元数据（字段为扁平结构）。
   门户会读取其中的 `package_name`、`version`、`release`、`nvr`、
   `srpm_name`、`architecture`、`source_revision`、`source_url`、
   `source_sha256`、`scanner`、`scanner_version`、`mock_config`、
   `csmock_exit_code`、`gate_result`、`plugins`（或 `enabled_plugins`）。
-  其中 `scanner` 可以是字符串，或包含 `name`、`version` 的对象；其他标量
-  字段类型不合法时会被忽略。解析失败会被静默忽略，不影响状态判定。
+  其中 `scanner` 可以是 `csmock` 字符串，或包含 `name = csmock`、`version` 的对象。
+  整份元数据先校验字段类型、长度及任务身份，不能改写已登记的包名；
+  如果提供 `schema_version`，目前仅支持整数 `1`。
+  可选元数据无效时整份忽略，并在任务元数据中记录 `manifest_error`；
+  不影响有效主结果的接受。
 
 ### 4.2 RPM
 
@@ -163,9 +177,13 @@ scan-results.html
 scan.log
 ```
 
-其中 `scan-manifest.json` 与 `scan-results.json` 是必需的；manifest 中的
-`rpm.sha256` 必须与事件里的 `scan_key` / `rpm_sha256` 一致，且 `scanner.name`
-必须是 `cve-bin-tool`。单个解析文件不超过 16 MiB。
+其中 `scan-manifest.json` 与 `scan-results.json` 是必需的。manifest 的
+`schema_version` 必须为整数 `1`、`scan_type` 必须为 `rpm`；
+`rpm.sha256` 必须与事件里的 `scan_key` / `rpm_sha256` 一致，`rpm.filename`
+必须与已登记包名一致，且 `scanner.name` 必须是 `cve-bin-tool`。
+`scanner.exit_code` 必须为整数，不能以布尔值或字符串代替；`scanner.args`
+如果提供，必须为字符串数组。若 manifest 额外提供 Job、Build 或 `scan_key`，
+也必须与已登记任务一致。单个解析文件默认不超过 16 MiB。
 
 ## 五、状态判定
 
@@ -174,8 +192,8 @@ scan.log
 | 状态 | SRPM | RPM |
 | --- | --- | --- |
 | `RUNNING` | 已收到 `started`，尚未结束 | 同左 |
-| `FINISHED` | 收到 `completed` 且归档校验通过 | 收到 `completed` 且两个 json 校验通过，扫描器退出码为 0 或 1 |
-| `FAILED` | 收到 `failed`（csmock 阶段失败） | 两个 json 存在，但 `cbt_exit_code` 不为 0/1 |
+| `FINISHED` | csmock 正常结束且归档内容校验通过 | 两个 json 校验通过，扫描器退出码为 0 或 1 |
+| `FAILED` | 收到 `failed` 或确认 csmock 非零退出 | 收到 `failed` 或确认扫描器退出码不为 0/1 |
 | `NOT_AVAILABLE` | 扫描已结束，但结果包缺失、损坏、无法解压或缺少预期文件 | 扫描已结束，但缺少有效的 manifest/json |
 
 RPM 的 `cbt_exit_code` 为 1 表示扫描成功且发现漏洞，只有大于 1 才是失败。

@@ -222,7 +222,9 @@ def _sync_build(
     if ini_bytes:
         try:
             ini_metadata = parse_scan_ini(ini_bytes.decode("utf-8"))
-            exit_code = validated_exit_code(ini_metadata, task.csmock_exit_code)
+            exit_code = validated_exit_code(
+                ini_metadata, task.csmock_exit_code, srpm_name=task.srpm_name,
+            )
             _set_ini(task, ini_metadata)
             task.csmock_exit_code = exit_code
             ini_valid = True

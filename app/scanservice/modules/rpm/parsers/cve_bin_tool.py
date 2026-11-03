@@ -5,6 +5,8 @@ import hashlib
 import json
 from typing import Any
 
+from ..schemas.manifest import RpmManifest
+
 
 REQUIRED_RESULT_FIELDS = {
     "vendor",
@@ -17,17 +19,9 @@ REQUIRED_RESULT_FIELDS = {
 
 def parse_manifest(content: bytes) -> dict[str, Any]:
     document = json.loads(content.decode("utf-8"))
-    if not isinstance(document, dict) or document.get("scan_type") != "rpm":
+    if not isinstance(document, dict):
         raise ValueError("invalid RPM scan manifest")
-    rpm = document.get("rpm")
-    scanner = document.get("scanner")
-    if not isinstance(rpm, dict) or not isinstance(scanner, dict):
-        raise ValueError("manifest is missing RPM or scanner metadata")
-    for key in ("filename", "sha256"):
-        if not rpm.get(key):
-            raise ValueError(f"manifest RPM metadata is missing {key}")
-    if scanner.get("name") != "cve-bin-tool":
-        raise ValueError("unsupported RPM scanner")
+    RpmManifest.parse_obj(document)
     return document
 
 

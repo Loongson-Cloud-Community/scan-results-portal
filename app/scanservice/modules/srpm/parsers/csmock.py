@@ -23,8 +23,6 @@ def parse_scan_ini(content: str) -> dict[str, Any]:
     section: dict[str, str] = {}
     if parser.has_section("scan"):
         section = dict(parser.items("scan"))
-    elif parser.sections():
-        section = dict(parser.items(parser.sections()[0]))
 
     plugins = section.get("enabled-plugins", "")
     return {
@@ -45,6 +43,7 @@ def parse_scan_ini(content: str) -> dict[str, Any]:
 
 
 def parse_summary(content: str) -> list[dict[str, Any]]:
+    """Accept empty clean results, but never silently discard malformed rows."""
     summaries: list[dict[str, Any]] = []
     for raw_line in content.splitlines():
         line = raw_line.strip()
@@ -62,13 +61,13 @@ def parse_summary(content: str) -> list[dict[str, Any]]:
             )
             continue
 
-        count_match = re.search(r"(\d+)\s*$", line)
+        count_match = re.search(r"(?<![-\w.])(\d+)\s*$", line)
         if not count_match:
-            continue
+            raise ValueError("scan-results-summary.txt contains an unrecognized row")
         count = int(count_match.group(1))
         body = line[: count_match.start()].strip(" \t:=")
         if not body:
-            continue
+            raise ValueError("scan-results-summary.txt contains a count without a checker")
 
         checker = "csmock"
         issue_type = body

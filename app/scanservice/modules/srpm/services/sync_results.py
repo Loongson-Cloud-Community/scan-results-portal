@@ -54,7 +54,9 @@ def set_manifest(task: SrpmScanTask, manifest: dict[str, Any]) -> None:
 
     exit_code = manifest.get("csmock_exit_code")
     if isinstance(exit_code, int) and not isinstance(exit_code, bool):
-        task.csmock_exit_code = exit_code
+        # Optional metadata cannot erase failure evidence from a callback.
+        if task.csmock_exit_code is None or task.csmock_exit_code == 0:
+            task.csmock_exit_code = exit_code
 
     plugins = manifest.get("plugins") or manifest.get("enabled_plugins")
     if isinstance(plugins, list) and all(isinstance(item, str) for item in plugins):

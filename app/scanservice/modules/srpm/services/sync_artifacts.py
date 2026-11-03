@@ -104,7 +104,14 @@ def find_valid_scan_archive(
             continue
         if not path.lower().endswith(".tar.xz"):
             continue
-        if REQUIRED_SCAN_FILES.issubset({member.name for member in members}):
+        required = [member for member in members if member.name in REQUIRED_SCAN_FILES]
+        # Required files must describe one result, not a mixture of roots or
+        # ambiguous duplicate entries. Flat and NVR-prefixed archives are valid.
+        if (
+            len(required) == len(REQUIRED_SCAN_FILES)
+            and {member.name for member in required} == REQUIRED_SCAN_FILES
+            and len({member.path.rpartition("/")[0] for member in required}) == 1
+        ):
             return archive
     return None
 

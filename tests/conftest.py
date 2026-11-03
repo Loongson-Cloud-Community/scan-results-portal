@@ -39,6 +39,7 @@ tool = csmock
 tool-version = csmock-3.8.7-2.ocs23
 mock-config = opencloudos-23-loongarch64
 project-name = curl-8.4.0-9.ocs23
+exit-code = 0
 """
 
 SRPM_SUMMARY = """

@@ -14,10 +14,11 @@ from ..csmock.archive import (
     list_visible_members,
     read_visible_member,
 )
+from ..csmock.acceptance import validated_exit_code
 from ....config import Settings
 from ....jenkins import JenkinsClient
 from ....resync import resync_registered_tasks
-from ....scan_state import FINISHED, NOT_AVAILABLE, RUNNING, is_terminal, state_without_results
+from ....scan_state import FAILED, FINISHED, NOT_AVAILABLE, RUNNING, is_terminal, state_without_results
 from ..models import SrpmScanTask
 from ..parsers.csmock import (
     parse_sarif,
@@ -199,28 +200,48 @@ def _sync_build(
         return read_artifact(basename)
 
     manifest_bytes = read_result_artifact("scan-manifest.json")
-    if manifest_bytes:
+    metadata = dict(task.scan_metadata or {})
+    metadata.pop("manifest_error", None)
+    task.scan_metadata = metadata
+    if manifest_bytes is not None:
         try:
-            _set_manifest(task, json.loads(manifest_bytes.decode("utf-8")))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            pass
+            manifest = json.loads(manifest_bytes.decode("utf-8"))
+            if not isinstance(manifest, dict):
+                raise ValueError("scan-manifest.json must contain an object")
+            _set_manifest(task, manifest)
+        except (UnicodeDecodeError, ValueError) as exc:
+            task.scan_metadata = {
+                **(task.scan_metadata or {}), "manifest_error": str(exc)[:4000],
+            }
 
-    ini_bytes = read_result_artifact("scan.ini")
+    # A direct file must not replace invalid or oversized required archive data.
+    read_required = read_archive_artifact if valid_scan_archive else read_result_artifact
+    ini_bytes = read_required("scan.ini")
     ini_valid = False
+    result_error = "A single csmock archive with all required result files is unavailable"
     if ini_bytes:
         try:
             ini_metadata = parse_scan_ini(ini_bytes.decode("utf-8"))
-            if not ini_metadata.get("raw"):
-                raise ValueError("scan.ini has no metadata")
+            exit_code = validated_exit_code(ini_metadata, task.csmock_exit_code)
             _set_ini(task, ini_metadata)
+            task.csmock_exit_code = exit_code
             ini_valid = True
-        except (UnicodeDecodeError, ValueError, configparser.Error):
-            pass
+        except (UnicodeDecodeError, ValueError, configparser.Error) as exc:
+            result_error = str(exc)
+    elif valid_scan_archive:
+        result_error = "scan.ini is empty or exceeds the parsing limit"
 
     summary_rows: list[dict[str, Any]] = []
-    summary_bytes = read_result_artifact("scan-results-summary.txt")
+    summary_bytes = read_required("scan-results-summary.txt")
+    summary_valid = False
     if summary_bytes is not None:
-        summary_rows = parse_summary(summary_bytes.decode("utf-8", errors="replace"))
+        try:
+            summary_rows = parse_summary(summary_bytes.decode("utf-8"))
+            summary_valid = True
+        except (UnicodeDecodeError, ValueError) as exc:
+            result_error = str(exc)
+    elif valid_scan_archive:
+        result_error = "scan-results-summary.txt exceeds the parsing limit or is unreadable"
 
     findings: list[dict[str, Any]] = []
     sarif_artifact = next(
@@ -262,15 +283,18 @@ def _sync_build(
     has_valid_result = (
         valid_scan_archive is not None
         and ini_valid
-        and summary_bytes is not None
+        and summary_valid
+        and task.csmock_exit_code == 0
     )
-    if has_valid_result or summary_rows or findings:
+    if has_valid_result or findings:
         _replace_results(session, task, summary_rows, findings)
         task.total_findings = len(findings) if findings else sum(
             int(row["count"]) for row in summary_rows
         )
 
-    if has_valid_result:
+    if task.csmock_exit_code is not None and task.csmock_exit_code != 0:
+        task.scan_result = FAILED
+    elif has_valid_result:
         task.scan_result = FINISHED
     else:
         task.scan_result = state_without_results(
@@ -280,8 +304,11 @@ def _sync_build(
 
     now = datetime.now(timezone.utc)
     task.last_synced_at = now
-    task.sync_status = "SYNCED"
-    task.sync_error = None
+    task.sync_status = (
+        "ERROR" if task.scan_result == NOT_AVAILABLE
+        else "PENDING" if task.scan_result == RUNNING else "SYNCED"
+    )
+    task.sync_error = result_error[:4000] if task.scan_result == NOT_AVAILABLE else None
     return task
 
 

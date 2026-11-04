@@ -6,7 +6,6 @@ import json
 import tarfile
 from typing import Any
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..csmock.archive import (
@@ -19,6 +18,7 @@ from ....config import Settings
 from ....jenkins import JenkinsClient
 from ....resync import resync_registered_tasks
 from ....scan_state import FAILED, FINISHED, NOT_AVAILABLE, RUNNING, is_terminal, state_without_results
+from ....task_writes import ensure_locked_task
 from ..models import SrpmScanTask
 from ..parsers.csmock import (
     parse_sarif,
@@ -70,23 +70,12 @@ def _sync_build(
     job = job or ""
     if not job:
         raise ValueError("Jenkins job is required to synchronize a build")
-    task = session.scalar(
-        select(SrpmScanTask).where(
-            SrpmScanTask.jenkins_job_full_name == job,
-            SrpmScanTask.jenkins_build_number == number,
-        )
-    )
-    if task is None:
-        task = SrpmScanTask(
-            jenkins_job_full_name=job,
-            jenkins_build_number=number,
-            lifecycle_state="DISCOVERED",
-            scan_result=NOT_AVAILABLE,
-            gate_result="NOT_EVALUATED",
-            sync_status="PENDING",
-        )
-        session.add(task)
-        session.flush()
+    task = ensure_locked_task(session, SrpmScanTask, {
+        "jenkins_job_full_name": job, "jenkins_build_number": number,
+    }, {
+        "lifecycle_state": "DISCOVERED", "scan_result": NOT_AVAILABLE,
+        "gate_result": "NOT_EVALUATED", "sync_status": "PENDING",
+    })
 
     if is_terminal(task.scan_result):
         return task

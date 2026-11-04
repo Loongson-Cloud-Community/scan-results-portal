@@ -16,6 +16,8 @@ from sqlalchemy.orm import Session
 
 from .config import Settings
 from .jenkins import JenkinsClient
+from .scan_state import is_terminal
+from .task_writes import lock_task
 
 
 TaskSync = Callable[[Session, JenkinsClient, Settings, Any], Any]
@@ -55,9 +57,11 @@ def resync_registered_tasks(
                 db.rollback()
                 current = db.get(model, task.id)
                 if current is not None:
-                    current.sync_status = "ERROR"
-                    current.sync_error = str(exc)[:4000]
-                    current.last_synced_at = datetime.now(timezone.utc)
+                    lock_task(db, current)
+                    if not is_terminal(getattr(current, state_column.key)):
+                        current.sync_status = "ERROR"
+                        current.sync_error = str(exc)[:4000]
+                        current.last_synced_at = datetime.now(timezone.utc)
                     db.commit()
                 failed += 1
     finally:

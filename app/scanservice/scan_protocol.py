@@ -57,9 +57,13 @@ class ScanEventRequest(ScanLocation):
         return value
 
 
+class ScanIdentityConflict(ValueError):
+    """The event or artifact belongs to a different package or task."""
+
+
 def require_matching_identity(expected: Mapping[str, Any], incoming: Mapping[str, Any]) -> None:
     """Reject conflicting evidence before changing any task fields."""
     for field, value in expected.items():
         candidate = incoming.get(field)
         if value is not None and candidate is not None and value != candidate:
-            raise ValueError(f"scan identity mismatch: {field}")
+            raise ScanIdentityConflict(f"scan identity mismatch: {field}")

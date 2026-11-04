@@ -11,6 +11,7 @@ from scanservice.modules.rpm.services import events as rpm_events
 from scanservice.modules.rpm.services.synchronization import sync_task
 from scanservice.modules.srpm.services import events as srpm_events
 from scanservice.modules.srpm.services.synchronization import sync_build
+from scanservice.scan_protocol import ScanIdentityConflict
 
 
 STARTED_AT = datetime(2026, 10, 1, 2, 0, tzinfo=timezone.utc)
@@ -113,7 +114,7 @@ def test_terminal_decision_survives_later_events(scan, terminal, later_event):
     scan.client.get_build = unavailable
     later = FINISHED_AT + timedelta(hours=1)
     if later_event == "started":
-        scan.start(created_at=later, **{scan.label_field: "different.rpm"})
+        scan.start(created_at=later)
     elif later_event == "completed":
         scan.complete(later, exit_code=0 if terminal == "FAILED" else 2)
     elif later_event == "failed":
@@ -131,7 +132,7 @@ def test_late_started_preserves_unavailable_result_and_finish_time(scan):
     assert scan.state() == "NOT_AVAILABLE"
     original = scan.snapshot()
 
-    scan.start(created_at=FINISHED_AT, **{scan.label_field: "different.rpm"})
+    scan.start(created_at=FINISHED_AT)
 
     assert scan.snapshot() == original
 
@@ -174,8 +175,15 @@ def test_srpm_finish_time_alone_preserves_ended_evidence(scan):
 def test_repeated_start_preserves_original_time_and_label(scan):
     original = scan.snapshot()
 
-    scan.start(created_at=FINISHED_AT, **{scan.label_field: "different.rpm"})
+    scan.start(created_at=FINISHED_AT)
 
+    assert scan.snapshot() == original
+
+
+def test_conflicting_start_is_rejected_without_changing_task(scan):
+    original = scan.snapshot()
+    with pytest.raises(ScanIdentityConflict):
+        scan.start(created_at=FINISHED_AT, **{scan.label_field: "different.rpm"})
     assert scan.snapshot() == original
 
 

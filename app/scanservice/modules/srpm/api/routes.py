@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from ....config import get_settings
 from ....db import get_db
-from ....scan_protocol import require_matching_identity
+from ....scan_protocol import ScanIdentityConflict, require_matching_identity
 from ....security import require_ingest_token, require_operator_token
 from ..schemas.events import SrpmEventRequest
 from ..services.artifacts import (
@@ -32,23 +32,20 @@ def receive_event(
 ) -> dict[str, Any]:
     settings = get_settings()
     values = payload.dict(exclude_unset=True)
-    task = find_task(
-        db,
-        payload.jenkins_job_full_name,
-        payload.jenkins_build_number,
-    )
-    if task is not None:
-        try:
-            require_matching_identity({"srpm_name": task.srpm_name}, values)
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    try:
+        task = find_task(
+            db,
+            payload.jenkins_job_full_name,
+            payload.jenkins_build_number,
+        )
+        if task is None or payload.event == "started":
+            task = register_start(db, settings, values)
+        require_matching_identity({"srpm_name": task.srpm_name}, values)
+    except ScanIdentityConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if payload.event == "started":
-        task = register_start(db, settings, values)
         db.commit()
     else:
-        if task is None:
-            task = register_start(db, settings, values)
-            db.commit()
         if payload.event == "completed":
             task = complete_task(
                 db,

@@ -13,6 +13,7 @@ from ....scan_protocol import require_matching_identity
 from ....scan_state import (
     FAILED, FINISHED, NOT_AVAILABLE, RUNNING, is_terminal, state_without_results,
 )
+from ....task_writes import lock_task
 from ..models import (
     RpmScanArtifact,
     RpmScanComponent,
@@ -179,6 +180,7 @@ def sync_task(
     task: RpmScanTask,
     limits: ArtifactLimits | None = None,
 ) -> RpmScanTask:
+    lock_task(db, task)
     if is_terminal(task.state):
         return task
     limits = limits or ArtifactLimits()

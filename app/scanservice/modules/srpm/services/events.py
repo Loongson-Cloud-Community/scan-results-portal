@@ -3,12 +3,13 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ....config import Settings
 from ....jenkins import JenkinsClient
+from ....scan_protocol import require_matching_identity
 from ....scan_state import FAILED, NOT_AVAILABLE, RUNNING, accepts_event, is_terminal
+from ....task_writes import ensure_locked_task, find_locked_task, lock_task
 from ..models import SrpmScanTask
 from .synchronization import sync_build
 
@@ -21,12 +22,9 @@ def _job_name(settings: Settings, values: dict[str, Any]) -> str:
 
 
 def find_task(db: Session, job: str, build_number: int) -> SrpmScanTask | None:
-    return db.scalar(
-        select(SrpmScanTask).where(
-            SrpmScanTask.jenkins_job_full_name == job,
-            SrpmScanTask.jenkins_build_number == build_number,
-        )
-    )
+    return find_locked_task(db, SrpmScanTask, {
+        "jenkins_job_full_name": job, "jenkins_build_number": build_number,
+    })
 
 
 def _ensure_task(
@@ -34,18 +32,13 @@ def _ensure_task(
 ) -> SrpmScanTask:
     job = _job_name(settings, values)
     build_number = int(values["jenkins_build_number"])
-    task = find_task(db, job, build_number)
-    if task is None:
-        task = SrpmScanTask(
-            jenkins_job_full_name=job,
-            jenkins_build_number=build_number,
-            lifecycle_state="DISCOVERED",
-            scan_result=NOT_AVAILABLE,
-            gate_result="NOT_EVALUATED",
-            sync_status="PENDING",
-        )
-        db.add(task)
-        db.flush()
+    task = ensure_locked_task(db, SrpmScanTask, {
+        "jenkins_job_full_name": job, "jenkins_build_number": build_number,
+    }, {
+        "lifecycle_state": "DISCOVERED", "scan_result": NOT_AVAILABLE,
+        "gate_result": "NOT_EVALUATED", "sync_status": "PENDING",
+    })
+    require_matching_identity({"srpm_name": task.srpm_name}, values)
     return task
 
 
@@ -66,6 +59,7 @@ def register_start(
     task.created_at = task.created_at or occurred_at
     task.started_at = task.started_at or occurred_at
     task.scan_started_at = task.scan_started_at or occurred_at
+    db.flush()
     return task
 
 
@@ -76,6 +70,7 @@ def complete_task(
     finished_at: datetime | None = None,
     exit_code: int | None = None,
 ) -> SrpmScanTask:
+    lock_task(db, task)
     if not accepts_event(task.scan_result, "completed"):
         return task
     ended_at = (
@@ -127,6 +122,7 @@ def fail_task(
     finished_at: datetime | None = None,
     exit_code: int | None = None,
 ) -> SrpmScanTask:
+    lock_task(db, task)
     if not accepts_event(task.scan_result, "failed"):
         return task
     ended_at = (

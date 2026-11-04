@@ -3,44 +3,37 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ....config import Settings
 from ....jenkins import JenkinsClient
+from ....scan_protocol import require_matching_identity
 from ....scan_state import FAILED, NOT_AVAILABLE, RUNNING, accepts_event, is_terminal
+from ....task_writes import ensure_locked_task, find_locked_task, lock_task
 from ..models import RpmScanTask
 from .synchronization import sync_task
 
 
 def find_task(db: Session, values: dict[str, Any]) -> RpmScanTask | None:
-    return db.scalar(
-        select(RpmScanTask).where(
-            RpmScanTask.jenkins_job_full_name == values["jenkins_job_full_name"],
-            RpmScanTask.jenkins_build_number == values["jenkins_build_number"],
-            RpmScanTask.scan_key == values["scan_key"],
-        )
-    )
+    return find_locked_task(db, RpmScanTask, {
+        key: values[key] for key in ("jenkins_job_full_name", "jenkins_build_number", "scan_key")
+    })
 
 
 def register_start(db: Session, values: dict[str, Any]) -> RpmScanTask:
-    task = find_task(db, values)
-    if task is None:
-        task = RpmScanTask(
-            scan_key=values["scan_key"],
-            jenkins_job_full_name=values["jenkins_job_full_name"],
-            jenkins_build_number=values["jenkins_build_number"],
-            rpm_name=values["rpm_name"],
-            rpm_sha256=values["rpm_sha256"],
-            state=RUNNING,
-            sync_status="PENDING",
-        )
-        db.add(task)
+    task = ensure_locked_task(db, RpmScanTask, {
+        key: values[key] for key in ("jenkins_job_full_name", "jenkins_build_number", "scan_key")
+    }, {
+        "rpm_name": values["rpm_name"], "rpm_sha256": values["rpm_sha256"],
+        "state": RUNNING, "sync_status": "PENDING",
+    })
+    require_matching_identity({"rpm_name": task.rpm_name, "rpm_sha256": task.rpm_sha256}, values)
     if accepts_event(task.state, "started", ended=task.finished_at is not None):
         task.created_at = (
             task.created_at or values.get("created_at") or datetime.now(timezone.utc)
         )
         task.state = RUNNING
+    db.flush()
     return task
 
 
@@ -50,6 +43,7 @@ def complete_task(
     task: RpmScanTask,
     values: dict[str, Any],
 ) -> RpmScanTask:
+    lock_task(db, task)
     if not accepts_event(task.state, "completed"):
         return task
     task.finished_at = (
@@ -87,6 +81,7 @@ def complete_task(
 
 
 def fail_task(db: Session, task: RpmScanTask, values: dict[str, Any]) -> RpmScanTask:
+    lock_task(db, task)
     if not accepts_event(task.state, "failed"):
         return task
     task.state = FAILED

@@ -1,4 +1,4 @@
-"""Bounded reconciliation must rotate through old and new registered scans."""
+"""Reconciliation scheduling and outcome accounting for registered scans."""
 
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -119,7 +119,7 @@ def test_failed_attempts_rotate_instead_of_blocking_the_queue(scheduler):
         raise RuntimeError("Jenkins temporarily unavailable")
 
     for _ in range(2):
-        assert run(fail) == {"synced": 0, "failed": 2}
+        assert run(fail) == {"attempted": 2, "synced": 0, "pending": 0, "failed": 2}
         clock.value += timedelta(seconds=1)
     assert seen == [1, 2, 3, 4]
     assert all(task.last_synced_at is not None for task in tasks)
@@ -163,3 +163,81 @@ def test_attempt_time_is_durable_across_session_expiration(scheduler, session):
     session.expire_all()
     assert session.get(type(first), first_id).last_synced_at.replace(tzinfo=timezone.utc) == clock.value
     assert session.get(type(second), second_id).last_synced_at is None
+
+
+@pytest.mark.parametrize("state,status,bucket", [
+    ("FINISHED", "SYNCED", "synced"),
+    ("FAILED", "SYNCED", "synced"),
+    ("RUNNING", "PENDING", "pending"),
+    ("NOT_AVAILABLE", "ERROR", "failed"),
+    ("RUNNING", "ERROR", "failed"),
+    ("RUNNING", "SYNCED", "pending"),
+    ("FINISHED", "PENDING", "pending"),
+])
+def test_counts_follow_sync_outcome_not_just_normal_return(scheduler, state, status, bucket):
+    seed, run, _, _, state_field = scheduler
+    task = seed(1)
+
+    def update(db, client, settings, task):
+        setattr(task, state_field, state)
+        task.sync_status = status
+
+    expected = {"attempted": 1, "synced": 0, "pending": 0, "failed": 0}
+    expected[bucket] += 1
+    assert run(update) == expected
+    assert getattr(task, state_field) == state
+    assert task.sync_status == status
+
+
+def test_mixed_batch_partitions_attempts_without_confusing_scan_failure(scheduler):
+    seed, run, _, clients, state_field = scheduler
+    for number in range(1, 6):
+        seed(number)
+
+    def update(db, client, settings, task):
+        number = task.jenkins_build_number
+        if number == 5:
+            raise RuntimeError("Jenkins is unavailable")
+        state, status = {
+            1: ("FINISHED", "SYNCED"), 2: ("FAILED", "SYNCED"),
+            3: ("RUNNING", "PENDING"), 4: ("NOT_AVAILABLE", "ERROR"),
+        }[number]
+        setattr(task, state_field, state)
+        task.sync_status = status
+
+    result = run(update, limit=5)
+    assert result == {"attempted": 5, "synced": 2, "pending": 1, "failed": 2}
+    assert result["attempted"] == sum(result[key] for key in ("synced", "pending", "failed"))
+    assert clients[0].closed
+
+
+def test_empty_batch_has_zero_outcome_counts(scheduler):
+    _, run, _, _, _ = scheduler
+    assert run(lambda *_args: None) == {
+        "attempted": 0, "synced": 0, "pending": 0, "failed": 0,
+    }
+
+
+def test_failed_commit_does_not_count_an_uncommitted_terminal_result(
+    scheduler, session, monkeypatch,
+):
+    seed, run, _, _, state_field = scheduler
+    task = seed(1)
+    commit = session.commit
+    attempts = 0
+
+    def fail_first_commit():
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("unable to commit synchronized result")
+        return commit()
+
+    def finish(db, client, settings, task):
+        setattr(task, state_field, "FINISHED")
+        task.sync_status = "SYNCED"
+
+    monkeypatch.setattr(session, "commit", fail_first_commit)
+    assert run(finish) == {"attempted": 1, "synced": 0, "pending": 0, "failed": 1}
+    assert getattr(task, state_field) == "RUNNING"
+    assert task.sync_status == "ERROR"

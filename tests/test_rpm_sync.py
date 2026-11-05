@@ -201,6 +201,6 @@ def test_sync_registered_tasks_only_resyncs_unfinished_tasks(
 
     result = sync_registered_tasks(settings, session)
 
-    assert result == {"synced": 2, "failed": 0}
+    assert result == {"attempted": 2, "synced": 0, "pending": 0, "failed": 2}
     assert sorted(number for _, number in client.requested_builds) == [2, 3]
     assert client.closed is True

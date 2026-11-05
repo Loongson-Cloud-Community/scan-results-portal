@@ -268,7 +268,7 @@ def test_resync_error_does_not_damage_another_requests_terminal_result(
             settings, db, model=model, state_column=getattr(model, state_field),
             active_states=("RUNNING", "NOT_AVAILABLE"), sync_one=delayed_failure,
         )
-        assert result["failed"] == 1
+        assert result == {"attempted": 1, "synced": 0, "pending": 0, "failed": 1}
         task = db.get(model, task_id)
         assert getattr(task, state_field) == "FAILED"
         assert task.sync_status == "SYNCED"
@@ -303,5 +303,8 @@ def test_resync_rotates_durable_attempts_on_postgresql(
                 model=model, state_column=getattr(model, state_field),
                 active_states=("RUNNING", "NOT_AVAILABLE"), sync_one=attempt,
             )
-            assert result == {"synced": 0 if fail_attempt else 1, "failed": int(fail_attempt)}
+            assert result == {
+                "attempted": 1, "synced": 0,
+                "pending": 0 if fail_attempt else 1, "failed": int(fail_attempt),
+            }
     assert seen == [1, 2, 3]

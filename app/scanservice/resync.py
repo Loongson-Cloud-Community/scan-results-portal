@@ -48,16 +48,26 @@ def resync_registered_tasks(
         settings.jenkins_token,
         settings.request_timeout_seconds,
     )
-    synced = failed = 0
+    counts = {"attempted": 0, "synced": 0, "pending": 0, "failed": 0}
     try:
         for task in tasks:
+            counts["attempted"] += 1
             try:
                 sync_one(db, client, settings, task)
                 # Scheduling progress belongs here, including adapters that
                 # leave the scan pending without producing any results yet.
                 task.last_synced_at = datetime.now(timezone.utc)
+                if task.sync_status == "ERROR":
+                    outcome = "failed"
+                elif task.sync_status == "SYNCED" and is_terminal(
+                    getattr(task, state_column.key)
+                ):
+                    # A known scanner failure is still a synchronized fact.
+                    outcome = "synced"
+                else:
+                    outcome = "pending"
                 db.commit()
-                synced += 1
+                counts[outcome] += 1
             except Exception as exc:
                 db.rollback()
                 current = db.get(model, task.id)
@@ -68,7 +78,7 @@ def resync_registered_tasks(
                         current.sync_error = str(exc)[:4000]
                         current.last_synced_at = datetime.now(timezone.utc)
                     db.commit()
-                failed += 1
+                counts["failed"] += 1
     finally:
         client.close()
-    return {"synced": synced, "failed": failed}
+    return counts

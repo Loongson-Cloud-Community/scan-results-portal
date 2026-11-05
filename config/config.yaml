@@ -2,6 +2,7 @@ jenkins:
   base_url: ""
 
 sync:
+  # 每批补偿同步的上限；按最久未尝试优先，不按最新构建号截断。
   recent_build_limit: 20
   request_timeout_seconds: 15
 

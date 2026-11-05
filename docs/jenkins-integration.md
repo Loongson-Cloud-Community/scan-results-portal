@@ -203,12 +203,14 @@ RPM 的 `cbt_exit_code` 为 1 表示扫描成功且发现漏洞，只有大于 1
 | 用途 | 接口 |
 | --- | --- |
 | 任务列表 / 详情 | `GET /api/v1/{srpm\|rpm}/tasks`、`GET /api/v1/{srpm\|rpm}/tasks/{id}` |
-| 手动触发同步（页面刷新） | `POST /api/v1/{srpm\|rpm}/sync` |
+| 内部运维补偿同步（需 operator Token） | `POST /api/v1/{srpm\|rpm}/sync` |
 
-Pipeline 不需要调用这些接口，它们主要服务于页面上的手动刷新与运维排查。
+Pipeline 不需要调用同步接口，它用于内部运维补偿与排查，不会由公开页面自动触发。
 `sync` 的行为：重新读取门户中已登记且尚未进入终态（`RUNNING` /
 `NOT_AVAILABLE`）的任务，逐个回 Jenkins 重新同步，最多处理
-`RECENT_BUILD_LIMIT` 个；不会导入没有登记过的构建。
+`RECENT_BUILD_LIMIT` 个。优先选择最久未尝试的任务；从未尝试过的使用门户
+登记时间排序，同一时间按任务 ID 升序。成功和失败的尝试都会推进轮次，
+不会总被新任务占满批次；不会导入没有登记过的构建。
 
 ## 七、多包、多 Job 接入
 

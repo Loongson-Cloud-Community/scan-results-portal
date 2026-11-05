@@ -1,9 +1,8 @@
-"""Shared helper behind the "refresh" action of the scan task pages.
+"""Bounded reconciliation of registered RPM and SRPM scans.
 
-Both the RPM and the SRPM page re-read Jenkins for tasks that are already
-registered in the portal but have not reached a terminal state yet. The
-scan-specific parts are supplied by the caller: the ORM model, the column
-that holds the state, the non-terminal states, and how to sync one task.
+The oldest outstanding attempt runs first. A never-attempted scan uses its
+portal registration time, so continuous arrivals cannot jump ahead of older
+retries. Scan-specific state and result handling stay in the supplied adapter.
 """
 
 from __future__ import annotations
@@ -11,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .config import Settings
@@ -32,11 +31,14 @@ def resync_registered_tasks(
     active_states: Iterable[str],
     sync_one: TaskSync,
 ) -> dict[str, int]:
-    """Re-sync registered tasks whose state is not terminal yet."""
+    """Reconcile one fair batch; persist its attempt times across requests."""
     tasks = db.scalars(
         select(model)
         .where(state_column.in_(tuple(active_states)))
-        .order_by(model.id.desc())
+        .order_by(
+            func.coalesce(model.last_synced_at, model.created_at_service).asc(),
+            model.id.asc(),
+        )
         .limit(settings.recent_build_limit)
     ).all()
 
@@ -51,6 +53,9 @@ def resync_registered_tasks(
         for task in tasks:
             try:
                 sync_one(db, client, settings, task)
+                # Scheduling progress belongs here, including adapters that
+                # leave the scan pending without producing any results yet.
+                task.last_synced_at = datetime.now(timezone.utc)
                 db.commit()
                 synced += 1
             except Exception as exc:

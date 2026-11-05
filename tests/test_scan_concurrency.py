@@ -1,7 +1,8 @@
 """PostgreSQL-only regression tests, using an isolated temporary schema."""
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 import os
 from threading import Barrier
 from uuid import uuid4
@@ -272,3 +273,35 @@ def test_resync_error_does_not_damage_another_requests_terminal_result(
         assert getattr(task, state_field) == "FAILED"
         assert task.sync_status == "SYNCED"
         assert task.sync_error is None
+
+
+@pytest.mark.parametrize("fail_attempt", [False, True])
+def test_resync_rotates_durable_attempts_on_postgresql(
+    pg_engine, scan_type, settings, monkeypatch, fail_attempt,
+):
+    _, model, state_field, start, *_ = scan_type
+    with Session(pg_engine) as seed:
+        for number in range(1, 4):
+            task = start(seed, jenkins_build_number=number)
+            task.created_at_service = STARTED + timedelta(hours=number)
+            if number == 1:
+                task.last_synced_at = STARTED + timedelta(hours=1, minutes=30)
+        seed.commit()
+    monkeypatch.setattr(resync_module, "JenkinsClient", lambda *args, **kwargs: FakeJenkinsClient())
+    seen = []
+
+    def attempt(db, client, settings, task):
+        seen.append(task.jenkins_build_number)
+        if fail_attempt:
+            raise RuntimeError("temporary Jenkins failure")
+
+    for _ in range(3):
+        # Reopening the session proves rotation is persisted, not process-local.
+        with Session(pg_engine) as db:
+            result = resync_module.resync_registered_tasks(
+                replace(settings, recent_build_limit=1), db,
+                model=model, state_column=getattr(model, state_field),
+                active_states=("RUNNING", "NOT_AVAILABLE"), sync_one=attempt,
+            )
+            assert result == {"synced": 0 if fail_attempt else 1, "failed": int(fail_attempt)}
+    assert seen == [1, 2, 3]

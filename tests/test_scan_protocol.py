@@ -7,7 +7,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from conftest import (
@@ -15,6 +15,7 @@ from conftest import (
     rpm_manifest, rpm_scan_artifacts, srpm_scan_artifacts,
 )
 from scanservice.db import Base, get_db
+from scanservice import completion_sync
 from scanservice.modules.rpm.api import routes as rpm_routes
 from scanservice.modules.rpm.models import RpmScanTask, RpmScanVulnerability
 from scanservice.modules.rpm.parsers.cve_bin_tool import parse_manifest
@@ -54,6 +55,7 @@ def http_session():
 
 @pytest.fixture
 def event_app(http_session, settings, monkeypatch):
+    monkeypatch.setattr(completion_sync, "SessionLocal", sessionmaker(bind=http_session.get_bind()))
     app = FastAPI()
     for routes in (rpm_routes, srpm_routes):
         monkeypatch.setattr(routes, "get_settings", lambda: settings)
@@ -191,7 +193,12 @@ def test_http_current_agent_event_sequence_still_finishes(http_session, event_ap
                 exit_field: 0,
             })
             assert completed.status_code == 200
-            assert completed.json()["state" if kind == "rpm" else "scan_result"] == "FINISHED"
+            assert completed.json()["sync_status"] == "PENDING"
+            session = http_session
+            session.expire_all()
+            model = RpmScanTask if kind == "rpm" else SrpmScanTask
+            task = session.scalars(select(model)).one()
+            assert getattr(task, "state" if kind == "rpm" else "scan_result") == "FINISHED"
             retried = await client.post(f"/api/v1/{kind}/events", json={
                 **values, "event": "completed", exit_field: 0,
             })

@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from ....config import get_settings
+from ....completion_sync import synchronize_completion
 from ....db import get_db
 from ....scan_protocol import ScanIdentityConflict, require_matching_identity
+from ....scan_state import is_terminal
 from ....security import require_ingest_token, require_operator_token
 from ..schemas.events import SrpmEventRequest
 from ..services.artifacts import (
@@ -16,7 +18,7 @@ from ..services.artifacts import (
     artifact_response,
     get_artifact_row,
 )
-from ..services.events import complete_task, fail_task, find_task, register_start
+from ..services.events import complete_task, fail_task, find_task, record_completion, register_start
 from ..services.synchronization import sync_registered_tasks
 from ..services.task_service import get_artifact_task, get_task, list_task_page, task_payload
 
@@ -27,6 +29,7 @@ router = APIRouter(prefix="/api/v1/srpm", tags=["srpm"])
 @router.post("/events")
 def receive_event(
     payload: SrpmEventRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     _: None = Depends(require_ingest_token),
 ) -> dict[str, Any]:
@@ -47,13 +50,17 @@ def receive_event(
         db.commit()
     else:
         if payload.event == "completed":
-            task = complete_task(
+            task = record_completion(
                 db,
-                settings,
                 task,
                 payload.finished_at,
                 payload.csmock_exit_code,
             )
+            db.commit()
+            if not is_terminal(task.scan_result):
+                background_tasks.add_task(
+                    synchronize_completion, settings, type(task), task.id, complete_task,
+                )
         elif payload.event == "failed":
             task = fail_task(
                 db,

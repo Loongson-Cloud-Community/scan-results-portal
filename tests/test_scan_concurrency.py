@@ -10,12 +10,12 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import create_engine, event, select, text
 from sqlalchemy.exc import OperationalError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.schema import CreateSchema, DropSchema
 
 from conftest import RPM_SCAN_KEY, FakeJenkinsClient, rpm_scan_artifacts, srpm_scan_artifacts
 from scanservice.db import Base
-from scanservice import resync as resync_module
+from scanservice import completion_sync, resync as resync_module
 from scanservice.modules.rpm.models import RpmScanTask
 from scanservice.modules.rpm.services import events as rpm_events
 from scanservice.modules.rpm.services.synchronization import sync_task
@@ -308,3 +308,49 @@ def test_resync_rotates_durable_attempts_on_postgresql(
                 "pending": 0 if fail_attempt else 1, "failed": int(fail_attempt),
             }
     assert seen == [1, 2, 3]
+
+
+@pytest.mark.parametrize("terminal", [None, "FAILED", "FINISHED"])
+def test_completion_background_reads_committed_receipt_and_preserves_terminal_state(
+    pg_engine, scan_type, settings, monkeypatch, terminal,
+):
+    kind, model, state_field, start, fail, complete, _ = scan_type
+    module = rpm_events if kind == "rpm" else srpm_events
+    factory = sessionmaker(bind=pg_engine, autoflush=False, expire_on_commit=False)
+    monkeypatch.setattr(completion_sync, "SessionLocal", factory)
+    with factory() as request:
+        task = start(request)
+        if kind == "rpm":
+            module.record_completion(request, task, {"finished_at": FINISHED, "cbt_exit_code": 0})
+        else:
+            module.record_completion(request, task, FINISHED, 0)
+        task_id = task.id
+        request.commit()
+        # A different request may establish a terminal result before work starts.
+        if terminal:
+            with factory() as winner:
+                current = winner.get(model, task_id)
+                (fail if terminal == "FAILED" else complete)(winner, current)
+                winner.commit()
+
+            def unexpected_client(*args, **kwargs):
+                pytest.fail("terminal completion must not contact Jenkins again")
+
+            monkeypatch.setattr(module, "JenkinsClient", unexpected_client)
+        processed = []
+
+        def handle(background_db, background_settings, current):
+            assert background_db is not request
+            assert current.finished_at == FINISHED
+            if not terminal:
+                assert current.sync_status == "PENDING"
+            processed.append(current.id)
+            return complete(background_db, current)
+
+        completion_sync.synchronize_completion(settings, model, task_id, handle)
+        assert processed == [task_id]
+    with factory() as db:
+        current = db.get(model, task_id)
+        assert getattr(current, state_field) == (terminal or "FINISHED")
+        assert current.sync_status == "SYNCED"
+        assert current.finished_at == FINISHED

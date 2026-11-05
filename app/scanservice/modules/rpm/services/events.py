@@ -37,12 +37,12 @@ def register_start(db: Session, values: dict[str, Any]) -> RpmScanTask:
     return task
 
 
-def complete_task(
+def record_completion(
     db: Session,
-    settings: Settings,
     task: RpmScanTask,
     values: dict[str, Any],
 ) -> RpmScanTask:
+    """Record scan end without treating the event as validated results."""
     lock_task(db, task)
     if not accepts_event(task.state, "completed"):
         return task
@@ -52,6 +52,22 @@ def complete_task(
     if task.cbt_exit_code is None:
         task.cbt_exit_code = values.get("cbt_exit_code")
     task.sync_status = "PENDING"
+    db.flush()
+    return task
+
+
+def complete_task(
+    db: Session,
+    settings: Settings,
+    task: RpmScanTask,
+    values: dict[str, Any] | None = None,
+) -> RpmScanTask:
+    task = record_completion(db, task, values or {})
+    if is_terminal(task.state):
+        return task
+    identity = {key: getattr(task, key) for key in (
+        "jenkins_job_full_name", "jenkins_build_number", "scan_key",
+    )}
     db.commit()
 
     client = JenkinsClient(
@@ -65,7 +81,7 @@ def complete_task(
         db.commit()
     except Exception as exc:
         db.rollback()
-        task = find_task(db, values)
+        task = find_task(db, identity)
         if task is None:
             raise
         if is_terminal(task.state):

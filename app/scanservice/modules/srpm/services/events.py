@@ -63,13 +63,13 @@ def register_start(
     return task
 
 
-def complete_task(
+def record_completion(
     db: Session,
-    settings: Settings,
     task: SrpmScanTask,
     finished_at: datetime | None = None,
     exit_code: int | None = None,
 ) -> SrpmScanTask:
+    """Record scan end without treating the event as validated results."""
     lock_task(db, task)
     if not accepts_event(task.scan_result, "completed"):
         return task
@@ -81,6 +81,20 @@ def complete_task(
     task.sync_status = "PENDING"
     if task.csmock_exit_code is None and exit_code is not None:
         task.csmock_exit_code = exit_code
+    db.flush()
+    return task
+
+
+def complete_task(
+    db: Session,
+    settings: Settings,
+    task: SrpmScanTask,
+    finished_at: datetime | None = None,
+    exit_code: int | None = None,
+) -> SrpmScanTask:
+    task = record_completion(db, task, finished_at, exit_code)
+    if is_terminal(task.scan_result):
+        return task
     db.commit()
 
     client = JenkinsClient(

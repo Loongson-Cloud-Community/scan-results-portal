@@ -49,26 +49,67 @@ def get_task_detail(db: Session, task_id: int) -> RpmScanTask:
         selectinload(RpmScanTask.artifacts).load_only(
             RpmScanArtifact.id, RpmScanArtifact.name, raiseload=True,
         ),
-        selectinload(RpmScanTask.components).load_only(
-            RpmScanComponent.vendor, RpmScanComponent.product, RpmScanComponent.version,
-            RpmScanComponent.vulnerability_count, raiseload=True,
-        ),
-        selectinload(RpmScanTask.vulnerabilities).load_only(
-            RpmScanVulnerability.id, RpmScanVulnerability.cve_number,
-            RpmScanVulnerability.severity, RpmScanVulnerability.score,
-            RpmScanVulnerability.vendor, RpmScanVulnerability.product,
-            RpmScanVulnerability.version, RpmScanVulnerability.source,
-            RpmScanVulnerability.description, RpmScanVulnerability.paths,
-            RpmScanVulnerability.cvss_vector, raiseload=True,
-        ),
     )
-    # Preserve the current display order; pagination is handled separately.
     task.artifacts.sort(key=lambda row: row.name)
-    task.components.sort(key=lambda row: (row.vendor, row.product, row.version))
-    task.vulnerabilities.sort(
-        key=lambda row: (row.severity, row.cve_number, row.vendor, row.product)
-    )
     return task
+
+
+def list_task_components_page(
+    db: Session, task_id: int, page: int, page_size: int,
+) -> tuple[int, list[RpmScanComponent]]:
+    """Read a page after the detail reader has checked that the task exists."""
+    total = db.scalar(select(func.count()).select_from(RpmScanComponent).where(
+        RpmScanComponent.task_id == task_id,
+    )) or 0
+    offset = (page - 1) * page_size
+    if offset >= total:
+        return total, []
+    rows = db.scalars(
+        select(RpmScanComponent)
+        .options(
+            load_only(RpmScanComponent.vendor, RpmScanComponent.product,
+                      RpmScanComponent.version, RpmScanComponent.vulnerability_count,
+                      raiseload=True),
+            raiseload("*"),
+        )
+        .where(RpmScanComponent.task_id == task_id)
+        .order_by(RpmScanComponent.vendor, RpmScanComponent.product,
+                  RpmScanComponent.version, RpmScanComponent.id)
+        .offset(offset).limit(page_size)
+    ).all()
+    return total, rows
+
+
+def list_task_vulnerabilities_page(
+    db: Session, task_id: int, page: int, page_size: int,
+) -> tuple[int, list[RpmScanVulnerability]]:
+    """Page detail records, not the distinct CVEs counted in the task summary."""
+    total = db.scalar(select(func.count()).select_from(RpmScanVulnerability).where(
+        RpmScanVulnerability.task_id == task_id,
+    )) or 0
+    offset = (page - 1) * page_size
+    if offset >= total:
+        return total, []
+    rows = db.scalars(
+        select(RpmScanVulnerability)
+        .options(
+            load_only(
+                RpmScanVulnerability.id, RpmScanVulnerability.cve_number,
+                RpmScanVulnerability.severity, RpmScanVulnerability.score,
+                RpmScanVulnerability.vendor, RpmScanVulnerability.product,
+                RpmScanVulnerability.version, RpmScanVulnerability.source,
+                RpmScanVulnerability.description, RpmScanVulnerability.paths,
+                RpmScanVulnerability.cvss_vector, raiseload=True,
+            ),
+            raiseload("*"),
+        )
+        .where(RpmScanVulnerability.task_id == task_id)
+        .order_by(RpmScanVulnerability.severity, RpmScanVulnerability.cve_number,
+                  RpmScanVulnerability.vendor, RpmScanVulnerability.product,
+                  RpmScanVulnerability.id)
+        .offset(offset).limit(page_size)
+    ).all()
+    return total, rows
 
 
 def get_artifact_task(db: Session, task_id: int) -> RpmScanTask:

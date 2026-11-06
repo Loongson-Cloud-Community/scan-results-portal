@@ -8,12 +8,11 @@ from fastapi import FastAPI
 from fastapi.encoders import jsonable_encoder
 import httpx
 import pytest
-from sqlalchemy import create_engine, event
+from sqlalchemy import event
 from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.orm import Session
-from sqlalchemy.pool import StaticPool
 
-from scanservice.db import Base, get_db
+from scanservice.db import get_db
 from scanservice.modules.rpm.api import routes as rpm_api
 from scanservice.modules.rpm.models import (
     RpmScanArtifact, RpmScanComponent, RpmScanTask, RpmScanVulnerability,
@@ -82,20 +81,6 @@ EXPECTED_FIELDS = {
         "sync_status",
     },
 }
-
-@pytest.fixture(params=["sqlite", "postgresql"])
-def query_engine(request):
-    if request.param == "postgresql":
-        yield request.getfixturevalue("pg_engine")
-    else:
-        engine = create_engine("sqlite://", poolclass=StaticPool,
-                               connect_args={"check_same_thread": False})
-        Base.metadata.create_all(engine)
-        try:
-            yield engine
-        finally:
-            engine.dispose()
-
 
 @pytest.fixture(params=["rpm", "srpm"])
 def portal(request, query_engine, settings, monkeypatch):
@@ -256,7 +241,7 @@ def test_web_detail_loads_only_visible_result_data(portal):
                      "vendor", "product", "--update never"):
             assert text in response.text
         assert_not_read(portal, "scan_metadata", ".raw", ".comments")
-        assert len(portal.statements) == 4
+        assert len(portal.statements) == 6
     assert_not_read(portal, "sync_error", "jenkins_url")
 
 
@@ -265,7 +250,7 @@ def test_web_detail_loads_only_visible_result_data(portal):
 def test_srpm_results_read_only_the_requested_collection(portal, endpoint):
     response = get(portal, f"/api/v1/srpm/tasks/{portal.id}/{endpoint}")
     assert response.status_code == 200
-    rows = response.json()
+    rows = response.json() if endpoint == "summary" else response.json()["items"]
     assert len(rows) == 1
     if endpoint == "summary":
         assert rows == [{"checker": "gcc", "issue_type": "warning", "count": 1}]
@@ -277,7 +262,7 @@ def test_srpm_results_read_only_the_requested_collection(portal, endpoint):
                                "message", "file_path", "line", "column", "code_context", "raw"}
         assert_not_read(portal, "scan_summary")
     assert_not_read(portal, "scan_artifact", "scan_metadata", "sync_error")
-    assert len(portal.statements) == 2
+    assert len(portal.statements) == (2 if endpoint == "summary" else 3)
 
 
 @pytest.mark.parametrize("path", ["api", "web"])

@@ -67,10 +67,17 @@ def list_task_summaries(db: Session, task_id: int) -> list[SrpmScanSummary]:
     ).all()
 
 
-def list_task_findings(db: Session, task_id: int) -> list[SrpmScanFinding]:
-    # Read only the finding fields exposed by the current API.
+def list_task_findings_page(
+    db: Session, task_id: int, page: int, page_size: int,
+) -> tuple[int, list[SrpmScanFinding]]:
     _read_task(db, task_id, ("id",))
-    return db.scalars(
+    total = db.scalar(select(func.count()).select_from(SrpmScanFinding).where(
+        SrpmScanFinding.task_id == task_id,
+    )) or 0
+    offset = (page - 1) * page_size
+    if offset >= total:
+        return total, []
+    rows = db.scalars(
         select(SrpmScanFinding)
         .options(
             load_only(
@@ -82,7 +89,10 @@ def list_task_findings(db: Session, task_id: int) -> list[SrpmScanFinding]:
             raiseload("*"),
         )
         .where(SrpmScanFinding.task_id == task_id)
+        .order_by(SrpmScanFinding.id)
+        .offset(offset).limit(page_size)
     ).all()
+    return total, rows
 
 
 def get_artifact_task(db: Session, task_id: int) -> SrpmScanTask:

@@ -58,13 +58,20 @@
   <h3>Components</h3>
   <div class="table-wrap"><table>
     <thead><tr><th>Vendor</th><th>Product</th><th>Version</th><th>CVEs</th></tr></thead>
-    <tbody>{% for row in task.components %}<tr><td>{{ row.vendor }}</td><td>{{ row.product }}</td><td>{{ row.version }}</td><td>{{ row.vulnerability_count }}</td></tr>{% else %}<tr><td colspan="4" class="empty">No component data.</td></tr>{% endfor %}</tbody>
+    <tbody>{% for row in components %}<tr><td>{{ row.vendor }}</td><td>{{ row.product }}</td><td>{{ row.version }}</td><td>{{ row.vulnerability_count }}</td></tr>{% else %}<tr><td colspan="4" class="empty">{{ "No component data on this page." if component_total else "No component data." }}</td></tr>{% endfor %}</tbody>
   </table></div>
+  {% if component_total %}
+  <nav class="pagination" aria-label="Component pages">
+    {% if component_page > 1 %}<a href="?component_page={{ [component_page - 1, component_pages]|min }}&amp;vulnerability_page={{ vulnerability_page }}#results">Previous</a>{% endif %}
+    <span>{{ component_total }} component records · Page {{ component_page }}</span>
+    {% if component_page * page_size < component_total %}<a href="?component_page={{ component_page + 1 }}&amp;vulnerability_page={{ vulnerability_page }}#results">Next</a>{% endif %}
+  </nav>
+  {% endif %}
   <h3>Vulnerabilities</h3>
   <div class="table-wrap"><table>
     <thead><tr><th>CVE</th><th>Severity</th><th>Score</th><th>Component</th><th>Source</th><th>Evidence</th></tr></thead>
     <tbody>
-    {% for row in task.vulnerabilities %}
+    {% for row in vulnerabilities %}
       <tr>
         <td>{{ row.cve_number }}</td>
         <td>{{ row.severity }}</td>
@@ -77,10 +84,17 @@
         <td colspan="6">{% if row.description %}<p>{{ row.description }}</p>{% endif %}<p>{{ row.paths or "No path data" }}</p>{% if row.cvss_vector %}<p>{{ row.cvss_vector }}</p>{% endif %}</td>
       </tr>
     {% else %}
-      <tr><td colspan="6" class="empty">No vulnerabilities found.</td></tr>
+      <tr><td colspan="6" class="empty">{{ "No vulnerabilities on this page." if vulnerability_total else "No vulnerabilities found." }}</td></tr>
     {% endfor %}
     </tbody>
   </table></div>
+  {% if vulnerability_total %}
+  <nav class="pagination" aria-label="Vulnerability pages">
+    {% if vulnerability_page > 1 %}<a href="?component_page={{ component_page }}&amp;vulnerability_page={{ [vulnerability_page - 1, vulnerability_pages]|min }}#results">Previous</a>{% endif %}
+    <span>{{ vulnerability_total }} vulnerability records · Page {{ vulnerability_page }}</span>
+    {% if vulnerability_page * page_size < vulnerability_total %}<a href="?component_page={{ component_page }}&amp;vulnerability_page={{ vulnerability_page + 1 }}#results">Next</a>{% endif %}
+  </nav>
+  {% endif %}
 </section>
 
 <section id="logs" class="card">

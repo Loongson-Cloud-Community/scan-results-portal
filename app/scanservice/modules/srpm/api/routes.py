@@ -21,7 +21,7 @@ from ..services.artifacts import (
 from ..services.events import complete_task, fail_task, find_task, record_completion, register_start
 from ..services.synchronization import sync_registered_tasks
 from ..services.task_queries import (
-    get_artifact_task, get_task_metadata, list_task_findings,
+    get_artifact_task, get_task_metadata, list_task_findings_page,
     list_task_metadata_page, list_task_summaries,
 )
 from ..services.task_service import task_payload
@@ -110,8 +110,14 @@ def task_summary(task_id: int, db: Session = Depends(get_db)) -> list[dict[str, 
 
 
 @router.get("/tasks/{task_id}/findings")
-def task_findings(task_id: int, db: Session = Depends(get_db)) -> list[dict[str, Any]]:
-    return [
+def task_findings(
+    task_id: int,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    total, rows = list_task_findings_page(db, task_id, page, page_size)
+    items = [
         {
             "id": row.id,
             "fingerprint": row.fingerprint,
@@ -125,8 +131,9 @@ def task_findings(task_id: int, db: Session = Depends(get_db)) -> list[dict[str,
             "code_context": row.code_context,
             "raw": row.raw,
         }
-        for row in list_task_findings(db, task_id)
+        for row in rows
     ]
+    return {"page": page, "page_size": page_size, "total": total, "items": items}
 
 
 @router.get("/tasks/{task_id}/artifacts")

@@ -11,6 +11,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 from sqlalchemy.schema import CreateSchema, DropSchema
 
 from scanservice.config import Settings
@@ -80,6 +81,20 @@ def session():
     factory = sessionmaker(bind=engine)
     with factory() as db:
         yield db
+
+
+@pytest.fixture(params=["sqlite", "postgresql"])
+def query_engine(request):
+    if request.param == "postgresql":
+        yield request.getfixturevalue("pg_engine")
+    else:
+        engine = create_engine("sqlite://", poolclass=StaticPool,
+                               connect_args={"check_same_thread": False})
+        Base.metadata.create_all(engine)
+        try:
+            yield engine
+        finally:
+            engine.dispose()
 
 
 @pytest.fixture

@@ -20,7 +20,11 @@ from ..services.artifacts import (
 )
 from ..services.events import complete_task, fail_task, find_task, record_completion, register_start
 from ..services.synchronization import sync_registered_tasks
-from ..services.task_service import get_artifact_task, get_task, list_task_page, task_payload
+from ..services.task_queries import (
+    get_artifact_task, get_task_metadata, list_task_findings,
+    list_task_metadata_page, list_task_summaries,
+)
+from ..services.task_service import task_payload
 
 
 router = APIRouter(prefix="/api/v1/srpm", tags=["srpm"])
@@ -83,7 +87,7 @@ def list_tasks(
     page_size: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    total, rows = list_task_page(db, search, scan_result, page, page_size)
+    total, rows = list_task_metadata_page(db, search, scan_result, page, page_size)
     return {
         "page": page,
         "page_size": page_size,
@@ -94,21 +98,19 @@ def list_tasks(
 
 @router.get("/tasks/{task_id}")
 def task_detail(task_id: int, db: Session = Depends(get_db)) -> dict[str, Any]:
-    return task_payload(get_task(db, task_id))
+    return task_payload(get_task_metadata(db, task_id))
 
 
 @router.get("/tasks/{task_id}/summary")
 def task_summary(task_id: int, db: Session = Depends(get_db)) -> list[dict[str, Any]]:
-    task = get_task(db, task_id)
     return [
         {"checker": row.checker, "issue_type": row.issue_type, "count": row.count}
-        for row in task.summaries
+        for row in list_task_summaries(db, task_id)
     ]
 
 
 @router.get("/tasks/{task_id}/findings")
 def task_findings(task_id: int, db: Session = Depends(get_db)) -> list[dict[str, Any]]:
-    task = get_task(db, task_id)
     return [
         {
             "id": row.id,
@@ -123,7 +125,7 @@ def task_findings(task_id: int, db: Session = Depends(get_db)) -> list[dict[str,
             "code_context": row.code_context,
             "raw": row.raw,
         }
-        for row in task.findings
+        for row in list_task_findings(db, task_id)
     ]
 
 

@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import tarfile
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.schema import CreateSchema, DropSchema
 
 from scanservice.config import Settings
 from scanservice.db import Base
@@ -45,6 +48,29 @@ exit-code = 0
 SRPM_SUMMARY = """
 CLANG_WARNING: deadcode.DeadStores 13
 """
+
+
+@pytest.fixture
+def pg_engine():
+    """Give each PostgreSQL test its own schema, never the service database."""
+    url = os.environ.get("TEST_DATABASE_URL")
+    if not url:
+        pytest.skip("TEST_DATABASE_URL is required for PostgreSQL tests")
+    admin = create_engine(url)
+    if admin.dialect.name != "postgresql":
+        admin.dispose()
+        pytest.fail("PostgreSQL tests require PostgreSQL")
+    schema = f"scan_test_{uuid4().hex}"
+    with admin.begin() as connection:
+        connection.execute(CreateSchema(schema))
+    engine = admin.execution_options(schema_translate_map={None: schema})
+    try:
+        Base.metadata.create_all(engine)
+        yield engine
+    finally:
+        with admin.begin() as connection:
+            connection.execute(DropSchema(schema, cascade=True))
+        admin.dispose()
 
 
 @pytest.fixture

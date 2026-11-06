@@ -16,7 +16,8 @@ from ..schemas.events import RpmEventRequest
 from ..services.artifacts import artifact_response, get_artifact
 from ..services.events import complete_task, fail_task, find_task, record_completion, register_start
 from ..services.synchronization import sync_registered_tasks
-from ..services.task_service import get_artifact_task, get_task, list_task_page, task_payload
+from ..services.task_queries import get_artifact_task, get_task_metadata, list_task_metadata_page
+from ..services.task_service import task_payload
 
 
 router = APIRouter(prefix="/api/v1/rpm", tags=["rpm"])
@@ -66,7 +67,7 @@ def list_tasks(
     page_size: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    total, tasks = list_task_page(db, search, state, page, page_size)
+    total, tasks = list_task_metadata_page(db, search, state, page, page_size)
     return {
         "page": page,
         "page_size": page_size,
@@ -77,7 +78,7 @@ def list_tasks(
 
 @router.get("/tasks/{task_id}")
 def task_detail(task_id: int, db: Session = Depends(get_db)) -> dict[str, Any]:
-    return task_payload(get_task(db, task_id))
+    return task_payload(get_task_metadata(db, task_id))
 
 
 @router.post("/sync")

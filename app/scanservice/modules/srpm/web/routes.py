@@ -5,11 +5,10 @@ from sqlalchemy.orm import Session
 
 from ....config import get_settings
 from ....db import get_db
+from ..services.task_queries import get_task_detail, list_task_web_page
 from ..services.task_service import (
     detail_values,
     format_timestamp,
-    get_task,
-    list_task_page,
     scan_method,
 )
 
@@ -29,7 +28,7 @@ def tasks_page(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     settings = get_settings()
-    total, rows = list_task_page(db, search, scan_result, page, settings.page_size)
+    total, rows = list_task_web_page(db, search, scan_result, page, settings.page_size)
     return templates.TemplateResponse(
         "srpm/tasks.html",
         {
@@ -50,7 +49,7 @@ def task_page(
     request: Request, task_id: int, db: Session = Depends(get_db)
 ) -> HTMLResponse:
     settings = get_settings()
-    task = get_task(db, task_id)
+    task = get_task_detail(db, task_id)
     return templates.TemplateResponse(
         "srpm/task_detail.html",
         {

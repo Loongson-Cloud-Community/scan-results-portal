@@ -3,18 +3,14 @@
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
-import os
 from threading import Barrier
-from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine, event, select, text
+from sqlalchemy import event, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.schema import CreateSchema, DropSchema
 
 from conftest import RPM_SCAN_KEY, FakeJenkinsClient, rpm_scan_artifacts, srpm_scan_artifacts
-from scanservice.db import Base
 from scanservice import completion_sync, resync as resync_module
 from scanservice.modules.rpm.models import RpmScanTask
 from scanservice.modules.rpm.services import events as rpm_events
@@ -27,28 +23,6 @@ from scanservice.scan_protocol import ScanIdentityConflict
 
 STARTED = datetime(2026, 10, 1, 10, tzinfo=timezone.utc)
 FINISHED = datetime(2026, 10, 1, 11, tzinfo=timezone.utc)
-
-
-@pytest.fixture
-def pg_engine():
-    url = os.environ.get("TEST_DATABASE_URL")
-    if not url:
-        pytest.skip("TEST_DATABASE_URL is required for PostgreSQL concurrency tests")
-    admin = create_engine(url)
-    if admin.dialect.name != "postgresql":
-        admin.dispose()
-        pytest.fail("concurrency tests require PostgreSQL")
-    schema = f"scan_concurrency_{uuid4().hex}"
-    with admin.begin() as connection:
-        connection.execute(CreateSchema(schema))
-    engine = admin.execution_options(schema_translate_map={None: schema})
-    try:
-        Base.metadata.create_all(engine)
-        yield engine
-    finally:
-        with admin.begin() as connection:
-            connection.execute(DropSchema(schema, cascade=True))
-        admin.dispose()
 
 
 @pytest.fixture(params=["rpm", "srpm"])

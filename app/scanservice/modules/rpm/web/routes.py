@@ -5,7 +5,8 @@ from sqlalchemy.orm import Session
 
 from ....config import get_settings
 from ....db import get_db
-from ..services.task_service import format_timestamp, get_task, list_task_page
+from ..services.task_queries import get_task_detail, list_task_web_page
+from ..services.task_service import format_timestamp
 
 
 router = APIRouter(tags=["rpm-web"])
@@ -22,7 +23,7 @@ def tasks_page(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     settings = get_settings()
-    total, tasks = list_task_page(db, search, state, page, settings.page_size)
+    total, tasks = list_task_web_page(db, search, state, page, settings.page_size)
     return templates.TemplateResponse(
         "rpm/tasks.html",
         {
@@ -50,6 +51,6 @@ def task_page(
         {
             "request": request,
             "title": settings.title,
-            "task": get_task(db, task_id),
+            "task": get_task_detail(db, task_id),
         },
     )
